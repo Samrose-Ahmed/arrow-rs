@@ -122,6 +122,16 @@ impl<W: Write + Send> ArrowWriter<W> {
         props: Option<WriterProperties>,
     ) -> Result<Self> {
         let schema = arrow_to_parquet_schema(&arrow_schema)?;
+        Self::try_new_with_parquet_schema(writer, arrow_schema, schema, props)
+    }
+
+    pub fn try_new_with_parquet_schema(
+        writer: W,
+        arrow_schema: SchemaRef,
+        parquet_schema: SchemaDescriptor,
+        props: Option<WriterProperties>,
+    ) -> Result<Self> {
+        let schema = parquet_schema;
         // add serialized arrow schema
         let mut props = props.unwrap_or_default();
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);

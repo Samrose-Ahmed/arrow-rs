@@ -57,7 +57,7 @@ use crate::{
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
     file::properties::WriterProperties,
-    format::{FileMetaData, KeyValue},
+    format::{FileMetaData, KeyValue}, schema::types::SchemaDescriptor,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -101,6 +101,29 @@ impl<W: AsyncWrite + Unpin + Send> AsyncArrowWriter<W> {
         let shared_buffer = SharedBuffer::new(buffer_size);
         let sync_writer =
             ArrowWriter::try_new(shared_buffer.clone(), arrow_schema, props)?;
+
+        Ok(Self {
+            sync_writer,
+            async_writer: writer,
+            shared_buffer,
+            buffer_size,
+        })
+    }
+
+    pub fn try_new_with_parquet_schema(
+        writer: W,
+        arrow_schema: SchemaRef,
+        parquet_schema: SchemaDescriptor,
+        buffer_size: usize,
+        props: Option<WriterProperties>,
+    ) -> Result<Self> {
+        let shared_buffer = SharedBuffer::new(buffer_size);
+        let sync_writer = ArrowWriter::try_new_with_parquet_schema(
+            shared_buffer.clone(),
+            arrow_schema,
+            parquet_schema,
+            props,
+        )?;
 
         Ok(Self {
             sync_writer,
