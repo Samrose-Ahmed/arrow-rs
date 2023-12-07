@@ -594,6 +594,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        if let Some(size_stats) = metadata.size_statistics() {
+            builder = builder.set_size_statistics(size_stats.clone())
+        }
         close.metadata = builder.build()?;
 
         if let Some(offsets) = close.offset_index.as_mut() {

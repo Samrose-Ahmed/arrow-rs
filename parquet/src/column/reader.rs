@@ -522,6 +522,7 @@ where
                             rep_levels_byte_len,
                             is_compressed: _,
                             statistics: _,
+                            ..
                         } => {
                             if num_nulls > num_values {
                                 return Err(general_err!("more nulls than values in page, contained {} values and {} nulls", num_values, num_nulls));

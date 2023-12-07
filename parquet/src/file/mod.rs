@@ -101,6 +101,7 @@ pub mod page_index;
 pub mod properties;
 pub mod reader;
 pub mod serialized_reader;
+pub mod size_statistics;
 pub mod statistics;
 pub mod writer;
 

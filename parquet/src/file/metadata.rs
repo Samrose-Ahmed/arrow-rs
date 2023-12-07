@@ -51,6 +51,8 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
+use super::size_statistics::{self, SizeStatistics};
+
 /// [`Index`] for each row group of each column.
 ///
 /// `column_index[row_group_number][column_number]` holds the
@@ -469,6 +471,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    size_statistics: Option<SizeStatistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -578,6 +581,11 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns size statistics that are set for this column chunk,
+    pub fn size_statistics(&self) -> Option<&SizeStatistics> {
+        self.size_statistics.as_ref()
+    }
+
     /// Returns the offset for the page encoding stats,
     /// or `None` if no page encoding stats are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
@@ -650,6 +658,9 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
+        let size_statistics = col_metadata
+            .size_statistics
+            .map(size_statistics::from_thrift);
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -679,6 +690,7 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            size_statistics,
             encoding_stats,
             bloom_filter_offset,
             bloom_filter_length,
@@ -728,6 +740,7 @@ impl ColumnChunkMetaData {
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
+            size_statistics: self.size_statistics.clone().map(size_statistics::to_thrift),
         }
     }
 
@@ -756,6 +769,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            size_statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
@@ -832,6 +846,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets size statistics for this column chunk.
+    pub fn set_size_statistics(mut self, value: SizeStatistics) -> Self {
+        self.0.size_statistics = Some(value);
+        self
+    }
+
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.0.encoding_stats = Some(value);
@@ -887,6 +907,8 @@ pub struct ColumnIndexBuilder {
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
     boundary_order: BoundaryOrder,
+    repetition_level_histograms: Option<Vec<i64>>,
+    definition_level_histograms: Option<Vec<i64>>,
     // If one page can't get build index, need to ignore all index in this column
     valid: bool,
 }
@@ -905,6 +927,8 @@ impl ColumnIndexBuilder {
             max_values: Vec::new(),
             null_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
             valid: true,
         }
     }
@@ -920,6 +944,36 @@ impl ColumnIndexBuilder {
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+    }
+
+    pub fn append_levels(
+        &mut self,
+        repetition_level_histograms: Vec<i64>,
+        definition_level_histograms: Vec<i64>,
+    ) {
+        if let Some(ref mut rlh) = self.repetition_level_histograms {
+            rlh.extend(repetition_level_histograms);
+        } else {
+            self.repetition_level_histograms = Some(repetition_level_histograms);
+        }
+        if let Some(ref mut dlh) = self.definition_level_histograms {
+            dlh.extend(definition_level_histograms);
+        } else {
+            self.definition_level_histograms = Some(definition_level_histograms);
+        }
+    }
+
+    pub fn has_levels(&self) -> bool {
+        self.repetition_level_histograms.is_some() && self.definition_level_histograms.is_some()
+    }
+
+    pub fn set_levels(
+        &mut self,
+        repetition_level_histograms: Option<Vec<i64>>,
+        definition_level_histograms: Option<Vec<i64>>,
+    ) {
+        self.repetition_level_histograms = repetition_level_histograms;
+        self.definition_level_histograms = definition_level_histograms;
     }
 
     pub fn set_boundary_order(&mut self, boundary_order: BoundaryOrder) {
@@ -942,6 +996,8 @@ impl ColumnIndexBuilder {
             self.max_values,
             self.boundary_order,
             self.null_counts,
+            self.repetition_level_histograms,
+            self.definition_level_histograms,
         )
     }
 }
@@ -952,6 +1008,7 @@ pub struct OffsetIndexBuilder {
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
     current_first_row_index: i64,
+    unencoded_byte_array_data_bytes: Option<Vec<i64>>,
 }
 
 impl Default for OffsetIndexBuilder {
@@ -967,6 +1024,7 @@ impl OffsetIndexBuilder {
             compressed_page_size_array: Vec::new(),
             first_row_index_array: Vec::new(),
             current_first_row_index: 0,
+            unencoded_byte_array_data_bytes: None,
         }
     }
 
@@ -981,6 +1039,12 @@ impl OffsetIndexBuilder {
         self.compressed_page_size_array.push(compressed_page_size);
     }
 
+    pub fn add_unencoded_byte_array_data_bytes(&mut self, size: i64) {
+        self.unencoded_byte_array_data_bytes
+            .get_or_insert(vec![])
+            .push(size);
+    }
+
     /// Build and get the thrift metadata of offset index
     pub fn build_to_thrift(self) -> OffsetIndex {
         let locations = self
@@ -990,7 +1054,7 @@ impl OffsetIndexBuilder {
             .zip(self.first_row_index_array.iter())
             .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations)
+        OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes)
     }
 }
 

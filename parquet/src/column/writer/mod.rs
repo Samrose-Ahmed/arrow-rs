@@ -21,6 +21,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
+use crate::file::size_statistics::SizeStatistics;
 use crate::format::{BoundaryOrder, ColumnIndex, OffsetIndex};
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
@@ -198,6 +199,7 @@ struct ColumnMetrics<T> {
     max_column_value: Option<T>,
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
+    unencoded_byte_array_data_bytes: Option<i64>,
 }
 
 /// Typed column writer for a primitive column.
@@ -282,6 +284,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 max_column_value: None,
                 num_column_nulls: 0,
                 column_distinct_count: None,
+                unencoded_byte_array_data_bytes: None,
             },
             column_index_builder: ColumnIndexBuilder::new(),
             offset_index_builder: OffsetIndexBuilder::new(),
@@ -618,7 +621,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 
     /// Update the column index and offset index when adding the data page
-    fn update_column_offset_index(&mut self, page_statistics: Option<&ValueStatistics<E::T>>) {
+    fn update_column_offset_index(
+        &mut self,
+        page_statistics: Option<&ValueStatistics<E::T>>,
+        size_statistics: Option<&SizeStatistics>,
+    ) {
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
@@ -689,6 +696,32 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 }
             }
         }
+
+        if let Some(size_stats) = size_statistics {
+            if self.column_index_builder.valid() {
+                self.column_index_builder.append_levels(
+                    size_stats
+                        .repetition_level_histogram
+                        .clone()
+                        .unwrap_or_default(),
+                    size_stats
+                        .definition_level_histogram
+                        .clone()
+                        .unwrap_or_default(),
+                );
+                if let Some(size) = size_stats.unencoded_byte_array_data_bytes {
+                    *self
+                        .column_metrics
+                        .unencoded_byte_array_data_bytes
+                        .get_or_insert(0) += size;
+                    self.offset_index_builder
+                        .add_unencoded_byte_array_data_bytes(size);
+                }
+            }
+        } else {
+            self.column_index_builder.set_levels(None, None);
+        }
+
         // update the offset index
         self.offset_index_builder
             .append_row_count(self.page_metrics.num_buffered_rows as i64);
@@ -766,8 +799,24 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             _ => None,
         };
 
+        let size_statistics: Option<SizeStatistics> = if !self.def_levels_sink.is_empty()
+            || !self.rep_levels_sink.is_empty()
+            || values_data.unencoded_byte_array_size.is_some()
+        {
+            Some(SizeStatistics {
+                repetition_level_histogram: Some(
+                    self.rep_levels_sink.iter().map(|i| *i as i64).collect(),
+                ),
+                definition_level_histogram: Some(
+                    self.def_levels_sink.iter().map(|i| *i as i64).collect(),
+                ),
+                unencoded_byte_array_data_bytes: values_data.unencoded_byte_array_size,
+            })
+        } else {
+            None
+        };
         // update column and offset index
-        self.update_column_offset_index(page_statistics.as_ref());
+        self.update_column_offset_index(page_statistics.as_ref(), size_statistics.as_ref());
         let page_statistics = page_statistics.map(Statistics::from);
 
         let compressed_page = match self.props.writer_version() {
@@ -906,6 +955,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => data_page_offset + total_compressed_size,
         };
 
+        let size_stats = SizeStatistics {
+            repetition_level_histogram: Some(
+                self.rep_levels_sink.iter().map(|i| *i as i64).collect(),
+            ),
+            definition_level_histogram: Some(
+                self.def_levels_sink.iter().map(|i| *i as i64).collect(),
+            ),
+            unencoded_byte_array_data_bytes: self.column_metrics.unencoded_byte_array_data_bytes,
+        };
+
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
@@ -914,7 +973,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
             .set_data_page_offset(data_page_offset)
-            .set_dictionary_page_offset(dict_page_offset);
+            .set_dictionary_page_offset(dict_page_offset)
+            .set_size_statistics(size_stats);
 
         if self.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();

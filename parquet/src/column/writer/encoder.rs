@@ -24,7 +24,7 @@ use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::DataType;
+use crate::data_type::{AsBytes, DataType};
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
@@ -63,6 +63,7 @@ pub struct DataPageValues<T> {
     pub encoding: Encoding,
     pub min_value: Option<T>,
     pub max_value: Option<T>,
+    pub unencoded_byte_array_size: Option<i64>,
 }
 
 /// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
@@ -124,6 +125,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    unencoded_byte_array_size: Option<i64>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -150,6 +152,11 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             for value in slice {
                 bloom_filter.insert(value);
             }
+        }
+
+        if T::get_physical_type() == Type::BYTE_ARRAY {
+            let len = slice.iter().map(|i| i.as_bytes().len() as i64).sum::<i64>();
+            *self.unencoded_byte_array_size.get_or_insert(0) += len;
         }
 
         match &mut self.dict_encoder {
@@ -196,6 +203,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             bloom_filter,
             min_value: None,
             max_value: None,
+            unencoded_byte_array_size: None,
         })
     }
 
@@ -271,6 +279,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
+            unencoded_byte_array_size: self.unencoded_byte_array_size.take(),
         })
     }
 }
