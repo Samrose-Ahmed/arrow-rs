@@ -184,6 +184,13 @@ impl MultiPartStore for GoogleCloudStorage {
         self.client.put_part(path, id, part_idx, data).await
     }
 
+    async fn put_object(&self, path: &Path, data: Bytes) -> Result<()> {
+        self.client
+            .put(path, data, crate::PutMode::Overwrite.into())
+            .await?;
+        Ok(())
+    }
+
     async fn complete_multipart(
         &self,
         path: &Path,

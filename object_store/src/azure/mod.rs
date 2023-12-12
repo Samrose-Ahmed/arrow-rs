@@ -167,6 +167,13 @@ impl MultiPartStore for MicrosoftAzure {
         self.client.put_block(path, part_idx, data).await
     }
 
+    async fn put_object(&self, path: &Path, data: Bytes) -> Result<()> {
+        self.client
+            .put_blob(path, data, crate::PutMode::Overwrite.into())
+            .await?;
+        Ok(())
+    }
+
     async fn complete_multipart(
         &self,
         path: &Path,

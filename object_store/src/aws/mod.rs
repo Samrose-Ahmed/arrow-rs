@@ -307,6 +307,11 @@ impl MultiPartStore for AmazonS3 {
         self.client.put_part(path, id, part_idx, data).await
     }
 
+    async fn put_object(&self, path: &Path, data: Bytes) -> Result<()> {
+        self.client.put_request(path, data).send().await?;
+        Ok(())
+    }
+
     async fn complete_multipart(
         &self,
         path: &Path,
