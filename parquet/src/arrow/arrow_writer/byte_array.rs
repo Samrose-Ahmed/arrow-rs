@@ -96,6 +96,7 @@ macro_rules! downcast_op {
 struct FallbackEncoder {
     encoder: FallbackEncoderImpl,
     num_values: usize,
+    unencoded_byte_array_size: Option<i64>,
 }
 
 /// The fallback encoder in use
@@ -152,6 +153,7 @@ impl FallbackEncoder {
         Ok(Self {
             encoder,
             num_values: 0,
+            unencoded_byte_array_size: None,
         })
     }
 
@@ -167,6 +169,8 @@ impl FallbackEncoder {
                 for idx in indices {
                     let value = values.value(*idx);
                     let value = value.as_ref();
+                    *self.unencoded_byte_array_size.get_or_insert(0) += value.len() as i64;
+
                     buffer.extend_from_slice((value.len() as u32).as_bytes());
                     buffer.extend_from_slice(value)
                 }
@@ -175,6 +179,7 @@ impl FallbackEncoder {
                 for idx in indices {
                     let value = values.value(*idx);
                     let value = value.as_ref();
+                    *self.unencoded_byte_array_size.get_or_insert(0) += value.len() as i64;
                     lengths.put(&[value.len() as i32]).unwrap();
                     buffer.extend_from_slice(value);
                 }
@@ -188,6 +193,7 @@ impl FallbackEncoder {
                 for idx in indices {
                     let value = values.value(*idx);
                     let value = value.as_ref();
+                    *self.unencoded_byte_array_size.get_or_insert(0) += value.len() as i64;
                     let mut prefix_length = 0;
 
                     while prefix_length < last_value.len()
@@ -271,6 +277,7 @@ impl FallbackEncoder {
             encoding,
             min_value,
             max_value,
+            unencoded_byte_array_size: self.unencoded_byte_array_size.take(),
         })
     }
 }
@@ -311,6 +318,7 @@ impl Storage for ByteArrayStorage {
 struct DictEncoder {
     interner: Interner<ByteArrayStorage>,
     indices: Vec<u64>,
+    unencoded_byte_array_size: Option<i64>,
 }
 
 impl DictEncoder {
@@ -324,6 +332,10 @@ impl DictEncoder {
 
         for idx in indices {
             let value = values.value(*idx);
+
+            let len: i64 = value.as_ref().len().try_into().unwrap();
+            *self.unencoded_byte_array_size.get_or_insert(0) += len;
+
             let interned = self.interner.intern(value.as_ref());
             self.indices.push(interned);
         }
@@ -376,6 +388,7 @@ impl DictEncoder {
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
+            unencoded_byte_array_size: self.unencoded_byte_array_size.take(),
         }
     }
 }
